@@ -32,9 +32,10 @@ int verbose = 0;
 
 // Camera parameters
 #define FOV_DEGREES 20
-int orbiting = 0, dollying = 0;
+int orbiting = 0, dollying = 0, shifting = 0;
 double start_angle, start_elevation, start_distance;
 int start_x, start_y;
+double target_x = 0, target_y = 0;
 double orbit_angle = 192.0;  // camera orbit angle, degrees
 double camera_elevation = -15;  // camera elevation angle, degrees
 double camera_distance = 16.0;  // distance from origin, metres
@@ -200,6 +201,7 @@ void update_camera() {
   double camera_z = sin(camera_elevation*M_PI/180)*camera_distance;
   gluLookAt(0, camera_y, camera_z, /* target */ 0, 0, 0, /* up */ 0, 0, 1);
   glRotatef(orbit_angle, 0, 0, 1);
+  glTranslatef(target_x, target_y, 0);
   display();
 }
 
@@ -210,20 +212,25 @@ void reshape(int width, int height) {
 }
 
 void mouse(int button, int state, int x, int y) {
-  if (state == GLUT_DOWN && glutGetModifiers() & GLUT_ACTIVE_SHIFT) {
+  if (state == GLUT_DOWN && button == GLUT_LEFT_BUTTON && glutGetModifiers() & GLUT_ACTIVE_SHIFT) {
     dollying = 1;
     start_distance = camera_distance;
     start_x = x;
     start_y = y;
-  } else if (state == GLUT_DOWN) {
+  } else if (state == GLUT_DOWN && button == GLUT_LEFT_BUTTON) {
     orbiting = 1;
     start_angle = orbit_angle;
     start_elevation = camera_elevation;
     start_x = x;
     start_y = y;
+  } else if (state == GLUT_DOWN && button == GLUT_RIGHT_BUTTON) {
+    //shifting = 1;
+    //start_x = x;
+    //start_y = y;
   } else {
     orbiting = 0;
     dollying = 0;
+    shifting = 0;
   }
 }
 
@@ -239,10 +246,32 @@ void motion(int x, int y) {
     camera_distance = distance < 1.0 ? 1.0 : distance;
     update_camera();
   }
+
+  if (shifting) {
+    target_x = (x - start_x)*2.0;
+    target_y = (y - start_y)*2.0;
+    update_camera();
+  }
 }
 
 void keyboard(unsigned char key, int x, int y) {
   if (key == '\x1b' || key == 'q') exit(0);
+}
+
+void keyboardSpecial(int key, int xx, int yy) {
+  float speed = 0.25f;
+  if (key == GLUT_KEY_LEFT) target_x -= speed;
+  if (key == GLUT_KEY_RIGHT) target_x += speed;
+  if (key == GLUT_KEY_UP) {
+    target_x += sin(orbit_angle) * speed;
+    target_y += cos(orbit_angle) * speed;
+  }
+  if (key == GLUT_KEY_DOWN) {
+    target_x -= sin(orbit_angle) * speed;
+    target_y -= cos(orbit_angle) * speed;
+  }
+
+  update_camera();
 }
 
 void handler(u8 channel, u16 count, pixel* p) {
@@ -441,8 +470,9 @@ int main(int argc, char** argv) {
   glutDisplayFunc(display);
   glutMouseFunc(mouse);
   glutMotionFunc(motion);
-  glutIgnoreKeyRepeat(1);
+  glutIgnoreKeyRepeat(0);
   glutKeyboardFunc(keyboard);
+  glutSpecialFunc(keyboardSpecial);
   glutIdleFunc(idle);
 
   glEnable(GL_DEPTH_TEST);
