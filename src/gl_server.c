@@ -38,13 +38,13 @@ int start_x, start_y;
 double target_x = 0, target_y = 0;
 double orbit_angle = 192.0;  // camera orbit angle, degrees
 double camera_elevation = -15;  // camera elevation angle, degrees
-double camera_distance = 16.0;  // distance from origin, metres
+double camera_distance = 60.0;  // distance from origin, metres
 double camera_aspect = 1.0;  // will be updated to match window aspect ratio
 
 // Shape parameters
-#define SHAPE_THICKNESS 0.06  // thickness of points and lines, metres
+#define SHAPE_THICKNESS 0.16  // thickness of points and lines, metres
 
-#define MAX_CHANNELS 10
+#define MAX_CHANNELS 33
 int channel_offsets[MAX_CHANNELS];
 int num_channels= 0;
 
@@ -295,14 +295,7 @@ void handler(u8 channel, u16 count, pixel* p) {
     return;
   }
   for (i = 0; i < count; i++) {
-    if (channel == 0) {
-      // Channel 0 is broadcast
-      for (j = 0; j < num_channels; j++) {
-        pixels[i + channel_offsets[j]] = p[i];
-      }
-    } else {
-      pixels[i + channel_offsets[channel-1]] = p[i];
-    }
+    pixels[i + channel_offsets[channel]] = p[i];
   }
 }
 
@@ -343,7 +336,7 @@ char* read_file(char* filename) {
   return buffer;
 }
 
-void load_layout(char* filename, int channel) {
+void load_layout(double x_off, double y_off, double z_off, char* filename, int channel) {
   char* buffer;
   cJSON* json;
   cJSON* item;
@@ -370,7 +363,7 @@ void load_layout(char* filename, int channel) {
   if (verbose) {
     printf("Channel %d offset is %d\n", channel, channel_offsets[channel]);
   }
-  fprintf(stderr, "Loaded \"%s\" as channel %d\n", filename, channel + 1);
+  fprintf(stderr, "Loaded \"%s\" as channel %d\n", filename, channel);
 
   int shape_count = 0;
   for (item = json->child, i = 0; item; item = item->next, i++) {
@@ -383,9 +376,9 @@ void load_layout(char* filename, int channel) {
     if (x && x->next && x->next->next) {
       shapes[num_shapes].draw = draw_point;
       shapes[num_shapes].index = channel_offsets[channel] + i;
-      shapes[num_shapes].g.point.x = x->valuedouble;
-      shapes[num_shapes].g.point.y = x->next->valuedouble;
-      shapes[num_shapes].g.point.z = x->next->next->valuedouble;
+      shapes[num_shapes].g.point.x = x->valuedouble + x_off;
+      shapes[num_shapes].g.point.y = x->next->valuedouble + y_off;
+      shapes[num_shapes].g.point.z = x->next->next->valuedouble + z_off;
       num_shapes++;
       shape_count++;
     }
@@ -396,12 +389,12 @@ void load_layout(char* filename, int channel) {
     if (x && x->next && x->next->next && x2 && x2->next && x2->next->next) {
       shapes[num_shapes].draw = draw_line;
       shapes[num_shapes].index = channel_offsets[channel] + i;
-      shapes[num_shapes].g.line.start.x = x->valuedouble;
-      shapes[num_shapes].g.line.start.y = x->next->valuedouble;
-      shapes[num_shapes].g.line.start.z = x->next->next->valuedouble;
-      shapes[num_shapes].g.line.end.x = x2->valuedouble;
-      shapes[num_shapes].g.line.end.y = x2->next->valuedouble;
-      shapes[num_shapes].g.line.end.z = x2->next->next->valuedouble;
+      shapes[num_shapes].g.line.start.x = x->valuedouble + x_off;
+      shapes[num_shapes].g.line.start.y = x->next->valuedouble + y_off;
+      shapes[num_shapes].g.line.start.z = x->next->next->valuedouble + z_off;
+      shapes[num_shapes].g.line.end.x = x2->valuedouble + x_off;
+      shapes[num_shapes].g.line.end.y = x2->next->valuedouble + y_off;
+      shapes[num_shapes].g.line.end.z = x2->next->next->valuedouble + z_off;
       num_shapes++;
       shape_count++;
     }
@@ -412,18 +405,52 @@ void load_layout(char* filename, int channel) {
   }
 }
 
-void init(char** filenames, int total_channels) {
-  int channel = 0, i = 0;
-  for (channel=0; channel < total_channels; channel++) {
-    load_layout(filenames[channel], channel);
+void init(char* master_layout, char* channel_layout) {
+  char* buffer;
+  cJSON *json, *item, *point, *x;
+  int default_layout[3] = {0,0,0};
+  int i;
+  int channel = 1;
+  
+  buffer = read_file(master_layout);
+  if (buffer == NULL) {
+	  fprintf(stderr, "Unable to open '%s'. Ignoring layout file.\n", master_layout);
+
+      //Manually create a cJSON object with a single point at 0,0,0
+      item = cJSON_CreateObject();
+      cJSON_AddItemToObject(item, "point", cJSON_CreateIntArray(default_layout, 3));
+      json = cJSON_CreateArray();
+      cJSON_AddItemToArray(json, item);
   }
+  else
+  {
+      json = cJSON_Parse(buffer);
+      if (json == NULL) {
+          fprintf(stderr, "Unable to parse '%s'\n", master_layout);
+          exit(1);
+      }
+      free(buffer);
+  }
+
+  //Iterate through each node in the json layout, create a new channel layout with the designated offset
+  for (item = json->child, i = 0; item; item = item->next, i++) {
+    point = cJSON_GetObjectItem(item, "point");
+    x = point ? point->child : NULL;
+    if (x && x->next && x->next->next) {
+        load_layout(x->valuedouble, x->next->valuedouble, x->next->next->valuedouble, channel_layout, channel);
+        channel++;
+        num_channels++;
+    }
+  }
+
   for (i = 0; i < 256; i++) {
+    //xfer[i].r = xfer[i].g = xfer[i].b = i;
     xfer[i].r = xfer[i].g = xfer[i].b = 0.1 + i*0.9/256;
   }
 }
 
 void usage(char* prog_name) {
-  fprintf(stderr, "Usage: %s <options> -l <filename.json> [<port>]\n", prog_name);
+  fprintf(stderr, "Usage: %s <options> -c <filename.json> -l <filename.json> [<port>]\n", prog_name);
   exit(1);
 }
 
@@ -436,19 +463,18 @@ int main(int argc, char** argv) {
   u8 channel = 1;
   enum { WORD_MODE, LINE_MODE } op_mode = WORD_MODE;  // Default set
   int opt;
-  char* layouts[MAX_CHANNELS];
+  char* channel_layout;
+  char* master_layout;
 
-  while ((opt = getopt(argc, argv, ":l:p:")) != -1)
+  while ((opt = getopt(argc, argv, ":l:c:p:")) != -1)
   {
       switch (opt)
       {
+      case 'c':
+          channel_layout = optarg;
+          break;
       case 'l':
-          num_channels += 1;
-          if (num_channels > MAX_CHANNELS) {
-              fprintf(stderr, "Can only simulate up to %d channels", MAX_CHANNELS);
-              exit(1);
-          }
-          layouts[num_channels - 1] = optarg;
+          master_layout = optarg;
           break;
       case 'p':
           port = strtol(optarg, NULL, 10);
@@ -457,14 +483,16 @@ int main(int argc, char** argv) {
           usage(argv[0]);
       }
   }
-  if (num_channels == 0) {
+  if (channel_layout == NULL)
+  {
       usage(argv[0]);
   }
-  init(layouts, num_channels);
+  init(master_layout, channel_layout);
   port = port ? port : OPC_DEFAULT_PORT;
   source = opc_new_source(port);
 
   glutInitDisplayMode(GLUT_DOUBLE | GLUT_RGB | GLUT_DEPTH);
+  glutInitWindowSize(1000,1000);
   glutCreateWindow("OPC");
   glutReshapeFunc(reshape);
   glutDisplayFunc(display);
